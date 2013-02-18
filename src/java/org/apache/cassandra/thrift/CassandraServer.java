@@ -30,6 +30,7 @@ import java.util.zip.Inflater;
 
 import com.google.common.base.Predicates;
 import com.google.common.collect.Maps;
+import org.apache.cassandra.db.marshal.AbstractType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -350,7 +351,42 @@ public class CassandraServer implements Cassandra.Iface
             }
         }
 
-        return getSlice(commands, consistency_level);
+        long startMs = System.currentTimeMillis();
+        try {
+            return getSlice(commands, consistency_level);
+        } finally {
+            if (logger.isInfoEnabled()) {
+                List<String> keyStrings = new ArrayList<String>();
+                for (ByteBuffer key: keys) {
+                    String keyString;
+                    try {
+                        keyString = ByteBufferUtil.string(key);
+                    } catch (CharacterCodingException e) {
+                        keyString = ByteBufferUtil.bytesToHex(key);
+                    }
+                    keyStrings.add(keyString);
+                }
+
+                AbstractType<?> comparator = metadata.getComparatorFor(null);
+                if (predicate.column_names != null) {
+                    List<String> columnNames = new ArrayList<String>();
+
+                    for (ByteBuffer column_name : predicate.column_names) {
+                        columnNames.add(comparator.getString(column_name));
+                    }
+                    logger.info("Got results for method: cassandra_get_slice, column_family={}, keys={}, column_names={}, elapsed_time={}",
+                            new Object[] {column_parent.getColumn_family(), keyStrings, columnNames, System.currentTimeMillis() - startMs});
+
+                } else {
+                    String start = predicate.slice_range == null ? "null" : comparator.getString(predicate.slice_range.start);
+                    String finish = predicate.slice_range == null ? "null" : comparator.getString(predicate.slice_range.finish);
+                    int count = predicate.slice_range == null ? -1 : predicate.slice_range.count;
+                    logger.info("Got results for method: cassandra_get_slice, column_family={}, keys={}, start={}, finish={}, count={}, elapsed_time={}",
+                            new Object[] {column_parent.getColumn_family(), keyStrings, start, finish, count, System.currentTimeMillis() - startMs});
+                }
+
+            }
+        }
     }
 
     private ColumnOrSuperColumn internal_get(ByteBuffer key, ColumnPath column_path, ConsistencyLevel consistency_level)
@@ -387,7 +423,26 @@ public class CassandraServer implements Cassandra.Iface
     {
         logger.debug("get");
 
-        return internal_get(key, column_path, consistency_level);
+        long start = System.currentTimeMillis();
+        try {
+            return internal_get(key, column_path, consistency_level);
+        } finally {
+            if (logger.isInfoEnabled()) {
+                String keyspace = state().getKeyspace();
+                CFMetaData metadata = ThriftValidation.validateColumnFamily(keyspace, column_path.column_family);
+                AbstractType<?> comparator = metadata.getComparatorFor(null);
+
+                String keyString;
+                try {
+                    keyString = ByteBufferUtil.string(key);
+                } catch (CharacterCodingException e) {
+                    keyString = ByteBufferUtil.bytesToHex(key);
+                }
+                String columnString = comparator.getString(column_path.column);
+                logger.info("Got results for method: cassandra_get, column_family={}, key={}, column={}, elapsed_time={}",
+                        new Object[] {column_path.getColumn_family(), keyString, columnString, System.currentTimeMillis() - start});
+            }
+        }
     }
 
     public int get_count(ByteBuffer key, ColumnParent column_parent, SlicePredicate predicate, ConsistencyLevel consistency_level)
