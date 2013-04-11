@@ -734,47 +734,123 @@ public class CassandraServer implements Cassandra.Iface
         ThriftValidation.validateKeyRange(metadata, column_parent.super_column, range);
         ThriftValidation.validateConsistencyLevel(keyspace, consistency_level, RequestType.READ);
 
+        StringBuilder sb = new StringBuilder("KeyRange(");
+        boolean first = true;
+
+        if (range.isSetStart_key()) {
+            sb.append("start_key:");
+            if (range.start_key == null) {
+                sb.append("null");
+            } else {
+                try {
+                    sb.append(ByteBufferUtil.string(range.start_key));
+                } catch (CharacterCodingException e) {
+                    sb.append(ByteBufferUtil.bytesToHex(range.start_key));
+                }
+            }
+            first = false;
+        }
+        if (range.isSetEnd_key()) {
+            if (!first) sb.append(", ");
+            sb.append("end_key:");
+            if (range.end_key == null) {
+                sb.append("null");
+            } else {
+                try {
+                    sb.append(ByteBufferUtil.string(range.end_key));
+                } catch (CharacterCodingException e) {
+                    sb.append(ByteBufferUtil.bytesToHex(range.end_key));
+                }
+            }
+            first = false;
+        }
+        if (range.isSetStart_token()) {
+            if (!first) sb.append(", ");
+            sb.append("start_token:");
+            if (range.start_token == null) {
+                sb.append("null");
+            } else {
+                sb.append(range.start_token);
+            }
+            first = false;
+        }
+        if (range.isSetEnd_token()) {
+            if (!first) sb.append(", ");
+            sb.append("end_token:");
+            if (range.end_token == null) {
+                sb.append("null");
+            } else {
+                sb.append(range.end_token);
+            }
+            first = false;
+        }
+        if (range.isSetRow_filter()) {
+            if (!first) sb.append(", ");
+            sb.append("row_filter:");
+            if (range.row_filter == null) {
+                sb.append("null");
+            } else {
+                sb.append(range.row_filter);
+            }
+            first = false;
+        }
+        if (!first) sb.append(", ");
+        sb.append("count:");
+        sb.append(range.count);
+        sb.append(")");
+
+        logger.info("Starting execution for method: cassandra_range_slice, keyspace={}, column_family={}, range={}",
+                new Object[] {keyspace, column_parent.column_family, sb.toString()});
+
         List<Row> rows;
-        try
-        {
-            IPartitioner<?> p = StorageService.getPartitioner();
-            AbstractBounds<RowPosition> bounds;
-            if (range.start_key == null)
-            {
-                Token.TokenFactory<?> tokenFactory = p.getTokenFactory();
-                Token left = tokenFactory.fromString(range.start_token);
-                Token right = tokenFactory.fromString(range.end_token);
-                bounds = Range.makeRowRange(left, right, p);
-            }
-            else
-            {
-                RowPosition end = range.end_key == null
-                                ? p.getTokenFactory().fromString(range.end_token).maxKeyBound(p)
-                                : RowPosition.forKey(range.end_key, p);
-                bounds = new Bounds<RowPosition>(RowPosition.forKey(range.start_key, p), end);
-            }
-            schedule(DatabaseDescriptor.getRpcTimeout());
+        long start = System.currentTimeMillis();
+        try {
             try
             {
-                rows = StorageProxy.getRangeSlice(new RangeSliceCommand(keyspace, column_parent, predicate, bounds, range.row_filter, range.count), consistency_level);
+                IPartitioner<?> p = StorageService.getPartitioner();
+                AbstractBounds<RowPosition> bounds;
+                if (range.start_key == null)
+                {
+                    Token.TokenFactory<?> tokenFactory = p.getTokenFactory();
+                    Token left = tokenFactory.fromString(range.start_token);
+                    Token right = tokenFactory.fromString(range.end_token);
+                    bounds = Range.makeRowRange(left, right, p);
+                }
+                else
+                {
+                    RowPosition end = range.end_key == null
+                            ? p.getTokenFactory().fromString(range.end_token).maxKeyBound(p)
+                            : RowPosition.forKey(range.end_key, p);
+                    bounds = new Bounds<RowPosition>(RowPosition.forKey(range.start_key, p), end);
+                }
+                schedule(DatabaseDescriptor.getRpcTimeout());
+                try
+                {
+                    rows = StorageProxy.getRangeSlice(new RangeSliceCommand(keyspace, column_parent, predicate, bounds, range.row_filter, range.count), consistency_level);
+                }
+                finally
+                {
+                    release();
+                }
+                assert rows != null;
             }
-            finally
+            catch (TimeoutException e)
             {
-                release();
+                logger.debug("... timed out");
+                throw new TimedOutException();
             }
-            assert rows != null;
-        }
-        catch (TimeoutException e)
-        {
-            logger.debug("... timed out");
-        	throw new TimedOutException();
-        }
-        catch (IOException e)
-        {
-            throw new RuntimeException(e);
-        }
+            catch (IOException e)
+            {
+                throw new RuntimeException(e);
+            }
 
-        return thriftifyKeySlices(rows, column_parent, predicate);
+            return thriftifyKeySlices(rows, column_parent, predicate);
+        } finally {
+            if (logger.isInfoEnabled()) {
+                logger.info("Got results for method: cassandra_range_slice, keyspace={}, column_family={}, range={}, elapsed_time={}",
+                        new Object[] {keyspace, column_parent.column_family, sb.toString(), System.currentTimeMillis() - start});
+            }
+        }
     }
 
     public List<KeySlice> get_paged_slice(String column_family, KeyRange range, ByteBuffer start_column, ConsistencyLevel consistency_level)
