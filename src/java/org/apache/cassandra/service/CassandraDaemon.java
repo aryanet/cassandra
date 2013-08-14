@@ -19,6 +19,7 @@ package org.apache.cassandra.service;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.instrument.UnmodifiableClassException;
 import java.net.InetAddress;
 import java.net.MalformedURLException;
 import java.net.URL;
@@ -44,6 +45,9 @@ import org.apache.cassandra.thrift.ThriftServer;
 import org.apache.cassandra.tracing.Tracing;
 import org.apache.cassandra.utils.CLibrary;
 import org.apache.cassandra.utils.Mx4jTool;
+
+import com.google.monitoring.runtime.instrumentation.ConstructorCallback;
+import com.google.monitoring.runtime.instrumentation.ConstructorInstrumenter;
 
 /**
  * The <code>CassandraDaemon</code> is an abstraction for a Cassandra daemon
@@ -453,7 +457,26 @@ public class CassandraDaemon
 
     public static void main(String[] args)
     {
+        instrumentAllocations();
         instance.activate();
+    }
+
+    /*
+     * @see: https://code.google.com/p/java-allocation-instrumenter/wiki/GettingStarted
+     */
+    private static void instrumentAllocations() {
+        try {
+            ConstructorInstrumenter.instrumentClass(
+              Column.class, new ConstructorCallback<Column>() {
+                @Override public void sample(Column c) {
+                    if ((Math.random() * 10000) > 9998) {
+                        logger.info("Allocated a column", new Exception("Sample stacktrace"));
+                    }
+                }
+            });
+        } catch (UnmodifiableClassException e) {
+            System.out.println("Class cannot be modified");
+        }
     }
 
     public interface Server
